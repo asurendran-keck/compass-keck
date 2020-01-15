@@ -62,6 +62,7 @@ import math
 import pdb
 
 if __name__ == "__main__":
+    # Docopt arguments copied into arguments variable
     arguments = docopt(__doc__)
     print("arguments")
     param_file = arguments["<parameters_filename>"]
@@ -70,7 +71,7 @@ if __name__ == "__main__":
     use_DB = False
     compute_tar_psf = not arguments["--fast"]
 
-    # Get parameters from file
+    # Choose supervisor, COMPASS supervisor default
     if arguments["--bench"]:
         from shesha.supervisor.benchSupervisor import BenchSupervisor as Supervisor
     elif arguments["--brahma"]:
@@ -80,19 +81,21 @@ if __name__ == "__main__":
 
     if arguments["--DB"]:
         use_DB = True
-
+    
+    # Initialize supervisor object with parameter file passed as argument
     supervisor = Supervisor(param_file, use_DB=use_DB)
-    #set variables
+    
+    # Custom docopt setters created for COMPASS-Keck. Can be used to set
+    # GS mag, ZA and gain. Bash script can be used to check performance
+    # by changing these parameters
     if arguments["--zenith"]:
         z = float(arguments["--zenith"])
         supervisor.config.p_atmos.set_r0(supervisor.config.p_atmos.get_r0() * (math.cos(z * math.pi / 180)) ** 0.6)
         print("Setting (zenith angle compensated) Fried parameter to ",str(supervisor.config.p_atmos.get_r0()),"...")
         supervisor.config.p_wfs0.set_gsalt(supervisor.config.p_wfs0.get_gsalt() / math.cos(z * math.pi / 180))
         print("Setting (zenith angle compensated) GS altitude to ",str(supervisor.config.p_wfs0.get_gsalt()),"...")
-        supervisor.config.p_geom.set_zenithangle(z) #CHECK
+        supervisor.config.p_geom.set_zenithangle(z) 
         print("Setting zenith angle to ",str(supervisor.config.p_geom.get_zenithangle()))
-    # end of set variables
-    #pdb.set_trace()
 
     if arguments["--devices"]:
         supervisor.config.p_loop.set_devices([
@@ -101,17 +104,17 @@ if __name__ == "__main__":
     if arguments["--generic"]:
         supervisor.config.p_controllers[0].set_type("generic")
         print("Using GENERIC controller...")
-
+    
+    # Initialize the telescope and atmospheric parameters in COMPASS
     supervisor.initConfig()
-    #print("TTcond=",supervisor.config.p_atmos.get_TTcond())
-    #pdb.set_trace()
-
+    
+    # Number of AO loop iterations can be passed from the bash script to overwrite the same in the parameter file
     if arguments["--niter"]:
         supervisor.loop(int(arguments["--niter"]), compute_tar_psf=compute_tar_psf)
     else:
         supervisor.loop(supervisor.config.p_loop.niter, compute_tar_psf=compute_tar_psf)
 
-    #get variables and write to file
+    # supervisor.getStrehl(0)[1] provides the long exposure SR, which together with ZA is written into the CSV file
     strehl_all = supervisor.getStrehl(0)
     strehl_le = strehl_all[1]
     row = [arguments["--zenith"], str(strehl_le)]
@@ -119,10 +122,3 @@ if __name__ == "__main__":
         writer = csv.writer(csvFile)
         writer.writerow(row)
     csvFile.close()
-
-
-    #end of get var and write to file
-    if arguments["--interactive"]:
-        from shesha.util.ipython_embed import embed
-        from os.path import basename
-        embed(basename(__file__), locals())
