@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 ## @package   shesha.script.closed_loop
-## @brief     script test to simulate a closed loop
-## @author    COMPASS Team <https://github.com/ANR-COMPASS>
-## @version   4.3.0
-## @date      2011/01/28
+## @brief     script test to simulate a closed loop (with the Keck NGS Mode)
+## @author    COMPASS Team <https://github.com/ANR-COMPASS> and Avinash Surendran
+## @version   4.3.0 (COMPASS)
+## @date      01/14/2020
 ## @copyright GNU Lesser General Public License
 #
 #  This file is part of COMPASS <https://anr-compass.github.io/compass/>
@@ -71,9 +71,11 @@ from astropy.io import fits
 import copy
 
 if __name__ == "__main__":
+    # Scaling factor corresponding to the minimum norm for the residual of difference between Keck CM and COMPASS CM (x-slope, y-slope and TT section separate)
     scale_x = -0.46
     scale_y = -0.42
     scale_tt = 23
+    # Docopt arguments copied into arguments variable
     arguments = docopt(__doc__)
     print("arguments")
     param_file = arguments["<parameters_filename>"]
@@ -82,7 +84,7 @@ if __name__ == "__main__":
     use_DB = False
     compute_tar_psf = not arguments["--fast"]
 
-    # Get parameters from file
+    # Choose supervisor, COMPASS supervisor default
     if arguments["--bench"]:
         from shesha.supervisor.benchSupervisor import BenchSupervisor as Supervisor
     elif arguments["--brahma"]:
@@ -93,6 +95,7 @@ if __name__ == "__main__":
     if arguments["--DB"]:
         use_DB = True
 
+    # Initialize supervisor object with parameter file passed as argument
     supervisor = Supervisor(param_file, use_DB=use_DB)
 
     if arguments["--devices"]:
@@ -102,50 +105,52 @@ if __name__ == "__main__":
     if arguments["--generic"]:
         supervisor.config.p_controllers[0].set_type("generic")
         print("Using GENERIC controller...")
-    #set variables
-    if arguments["--r0"]:
-        supervisor.config.p_atmos.set_r0(float(arguments["--r0"]))
-        print("Setting Fried parameter to ", str(supervisor.config.p_atmos.get_r0()),"...")
+    # Custom docopt setters created for COMPASS-Keck. Can be used to set
+    # GS mag, ZA and gain. Bash script can be used to check performance
+    # by changing these parameters
     if arguments["--magnitude"]:
         supervisor.config.p_wfs0.set_gsmag(float(arguments["--magnitude"]))
         print("Setting magnitude to ", str(supervisor.config.p_wfs0.get_gsmag()),"...")
     if arguments["--zenith"]:
         z = float(arguments["--zenith"])
-        alt_list = supervisor.config.p_atmos.get_alt()
-        alt_list = [(i / math.cos(z * math.pi / 180)) for i in alt_list]
-        supervisor.config.p_atmos.set_alt(alt_list)
-        print("Setting (zenith angle compensated) altitude list to ", str(supervisor.config.p_atmos.get_alt()),"...")
+        supervisor.config.p_atmos.set_r0(supervisor.config.p_atmos.get_r0() * (math.cos(z * math.pi / 180)) ** 0.6)
+        print("Setting (zenith angle compensated) Fried parameter to ",str(supervisor.config.p_atmos.get_r0()),"...")
+        supervisor.config.p_geom.set_zenithangle(z)
+        print("Setting zenith angle to ",str(supervisor.config.p_geom.get_zenithangle()))
     if arguments["--gain"]:
         gain = float(arguments["--gain"])
         supervisor.config.p_controller0.set_gain(gain)
         print("Setting controller gain to ", str(supervisor.config.p_controller0.get_gain()),"...")
+    # Initialize the telescope and atmospheric parameters in COMPASS
     supervisor.initConfig()
-    #cmat_comp = supervisor.getCmat(0)
-    #cmat_comp_tilt = copy.deepcopy(cmat_comp[349:351,:])
-    #fits.writeto('cmat_comp.fits', cmat_comp, clobber = True)
-      #pdb.set_trace()
+
+    # Load Keck subaperture mask
     subap_mask_keck = np.loadtxt('subap_mask_keck.txt', dtype = 'int', delimiter=',')
     subap_mask_keck_1d = subap_mask_keck.flatten()
     mask_pos = np.where(np.array(subap_mask_keck_1d) == 1)
     mask_pos = np.array(mask_pos)[0,:]
     recon_array_x = np.zeros((351, 400))
     recon_array_y = np.zeros((351, 400))
+    # Load Keck CM (including TT rows)
     recon_file = open('keck_recon_circ.mr', 'rb')
     recon_data = recon_file.read()
     recon_array = struct.unpack("!214016f", recon_data) # where 608*352=214016
     recon_xyxy = np.reshape(recon_array, (352, 608))[0:351, :]
+    # Apply scaling factors to the x-slope, y-slope and TT section of the CM
     recon_x_dm = scale_x * copy.deepcopy(recon_xyxy[0:349,::2])
     recon_y_dm = scale_y * copy.deepcopy(recon_xyxy[0:349,1::2])
     recon_x_tt = scale_tt * copy.deepcopy(recon_xyxy[349:351,::2])
     recon_y_tt = scale_tt * copy.deepcopy(recon_xyxy[349:351,1::2])
     recon_x = np.concatenate((recon_x_dm, recon_x_tt))
     recon_y = np.concatenate((recon_y_dm, recon_y_tt))
+    # Incorporate the 304 columns corresponding to x and y slopes of the Keck CM into a 400 column CM with the subaperture mask
     for i in range(304):
       recon_array_x[:, mask_pos[i]] = recon_x[:, i]
       recon_array_y[:, mask_pos[i]] = recon_y[:, i]
+    # Final scaled and masked Keck CM to be used for COMPASS
     cmat_keck = np.concatenate((recon_array_x, recon_array_y), axis = 1)
-    # cmat_keck_ttsign = np.concatenate((cmat_keck_neg, cmat_comp_tilt))
-    #fits.writeto('cmat_keck.fits', cmat_keck, clobber = True)
+
+    # Overwrite the CM with scaled and masked Keck CM
     supervisor.setCommandMatrix(cmat_keck)
 
     #Verification whether recon is used
@@ -156,25 +161,18 @@ if __name__ == "__main__":
        print("Size of the command matrix is ", np.shape(recon_check))
     else:
        print("Command matrix is not accepted");
-       #sys.exit()
 
+    # Number of AO loop iterations can be passed from the bash script to overwrite the same in the parameter file
     if arguments["--niter"]:
         supervisor.loop(int(arguments["--niter"]), compute_tar_psf=compute_tar_psf)
     else:
         supervisor.loop(supervisor.config.p_loop.niter, compute_tar_psf=compute_tar_psf)
 
-    #get variables and write to file
-
+    # supervisor.getStrehl(0)[1] provides the long exposure SR, which together with gain and ZA is written into the CSV file
     strehl_all = supervisor.getStrehl(0)
     strehl_le = strehl_all[1]
-    row = [str(supervisor.config.p_atmos.get_r0()), str(supervisor.config.p_controller0.get_gain()), str(strehl_le)]
+    row = [str(supervisor.config.p_geom.get_zenithangle()), str(supervisor.config.p_controller0.get_gain()), str(strehl_le)]
     with open(save_file, 'a') as csvFile:
         writer = csv.writer(csvFile)
         writer.writerow(row)
     csvFile.close()
-
-    #end of get var and write to file
-    if arguments["--interactive"]:
-        from shesha.util.ipython_embed import embed
-        from os.path import basename
-        embed(basename(__file__), locals())
