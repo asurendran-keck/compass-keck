@@ -3,7 +3,7 @@
 # and can be used to benchmark the performance with parameters like zenith angle, magnitude etc.
 # The example given here simulates the NGS mode with the Keck NGS parameter file, and runs the COMPASS simulation
 # for five different zenith angle inputs
-script_name="compare_perf_avi_ngs.py"
+script_name="compass-keck_ngs.py"
 param_name="scao_sh_20x20_4pix_keck_ngs_ml_dtt.py"
 result_name="${param_name::-3}.txt"
 z=('0' '15' '30' '45' '60')
